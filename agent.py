@@ -39,6 +39,11 @@ GOOGLE_NEWS_RSS = "https://news.google.com/rss/search?q=MMTLP"
 WEBULL_STATUS = "https://status.webull.com/api/v2/status.json"
 DTCC_RSS = "https://www.dtcc.com/-/media/Files/rss/DTCC-Alerts.xml"
 
+# Congressional public metadata endpoints (non-content)
+CONGRESS_BILLS_API = "https://api.congress.gov/v3/bill?format=json"
+CONGRESS_RECORD_API = "https://api.congress.gov/v3/congressional-record?format=json"
+CONGRESS_HEARINGS_API = "https://api.congress.gov/v3/hearing?format=json"
+
 
 # ---------------------------------------------------------
 # UTILITIES
@@ -92,8 +97,8 @@ def check_foia_page(url, label, seen):
             return seen
 
         content_hash = hash_item(r.text)
-
         key = f"foia:{label}:{content_hash}"
+
         if key not in seen:
             seen.add(key)
             notify(f"📂 **FOIA Update Detected — {label}**\n{url}")
@@ -108,6 +113,107 @@ def check_all_foia(seen):
     seen = check_foia_page(SEC_FOIA_LOG, "SEC FOIA Log", seen)
     seen = check_foia_page(SEC_FOIA_READING_ROOM, "SEC FOIA Reading Room", seen)
     seen = check_foia_page(FINRA_FOIA_READING_ROOM, "FINRA FOIA Reading Room", seen)
+    return seen
+
+
+# ---------------------------------------------------------
+# CONGRESSIONAL PUBLIC METADATA MONITORING
+# ---------------------------------------------------------
+
+def check_congress_bills(seen):
+    """Monitor Congress.gov bills metadata (no content scanning)."""
+    print("Checking Congress.gov bills metadata...")
+    try:
+        r = requests.get(CONGRESS_BILLS_API, timeout=15)
+        if r.status_code != 200:
+            print("Congress bills request failed:", r.status_code)
+            return seen
+
+        data = r.json()
+        bills = data.get("bills", [])
+
+        for bill in bills:
+            bill_number = bill.get("number", "")
+            bill_type = bill.get("type", "")
+            introduced = bill.get("introducedDate", "")
+
+            combined = f"{bill_type}:{bill_number}:{introduced}"
+            h = hash_item("congress_bill:" + combined)
+
+            if h not in seen:
+                seen.add(h)
+                notify(
+                    f"📄 **New Congressional Bill Published**\n"
+                    f"Bill: {bill_type} {bill_number}\n"
+                    f"Introduced: {introduced}"
+                )
+    except Exception as e:
+        print("Congress bills error:", e)
+
+    return seen
+
+
+def check_congress_record(seen):
+    """Monitor Congressional Record issue metadata (no text analysis)."""
+    print("Checking Congressional Record metadata...")
+    try:
+        r = requests.get(CONGRESS_RECORD_API, timeout=15)
+        if r.status_code != 200:
+            print("Congressional Record request failed:", r.status_code)
+            return seen
+
+        data = r.json()
+        issues = data.get("congressionalRecord", [])
+
+        for issue in issues:
+            date = issue.get("dateIssued", "")
+            citation = issue.get("citation", "")
+
+            combined = f"{date}:{citation}"
+            h = hash_item("congress_record:" + combined)
+
+            if h not in seen:
+                seen.add(h)
+                notify(
+                    f"📘 **New Congressional Record Issue Released**\n"
+                    f"Date: {date}\n"
+                    f"Citation: {citation}"
+                )
+    except Exception as e:
+        print("Congressional Record error:", e)
+
+    return seen
+
+
+def check_congress_hearings(seen):
+    """Monitor Congressional hearing calendar metadata (dates/committees only)."""
+    print("Checking Congressional hearing calendar metadata...")
+    try:
+        r = requests.get(CONGRESS_HEARINGS_API, timeout=15)
+        if r.status_code != 200:
+            print("Congress hearings request failed:", r.status_code)
+            return seen
+
+        data = r.json()
+        hearings = data.get("hearings", [])
+
+        for hdata in hearings:
+            date = hdata.get("date", "")
+            committee = hdata.get("committee", "")
+
+            combined = f"{date}:{committee}"
+            h = hash_item("congress_hearing:" + combined)
+
+            if h not in seen:
+                seen.add(h)
+                notify(
+                    f"🏛️ **New Congressional Hearing Scheduled**\n"
+                    f"Committee: {committee}\n"
+                    f"Date: {date}"
+                )
+    except Exception as e:
+        print("Congress hearings error:", e)
+
     return seen
 
 
@@ -127,7 +233,7 @@ def check_sec_filings(seen):
         fingerprint = str(data.get("entityType", "")) + str(data.get("cik", "")) + str(
             data.get("facts", {}).keys()
         )
-        h = hash_item(fingerprint)
+        h = hash_item("sec_companyfacts:" + fingerprint)
 
         if h not in seen:
             seen.add(h)
@@ -144,7 +250,7 @@ def check_sec_rss(seen):
         feed = feedparser.parse(SEC_RSS)
         for entry in feed.entries:
             combined = entry.title + entry.link
-            h = hash_item(combined)
+            h = hash_item("sec_rss:" + combined)
 
             if h not in seen:
                 seen.add(h)
@@ -174,7 +280,7 @@ def check_sec_company_api(seen):
             link = f"https://www.sec.gov/Archives/edgar/data/1861063/{acc.replace('-', '')}/{acc}-index.html"
 
             combined = acc + form
-            h = hash_item(combined)
+            h = hash_item("sec_api:" + combined)
 
             if h not in seen:
                 seen.add(h)
@@ -194,8 +300,8 @@ def check_finra_news(seen):
     try:
         feed = feedparser.parse(FINRA_NEWS_RSS)
         for entry in feed.entries:
-            text = entry.title + entry.link
-            h = hash_item(text)
+            combined = entry.title + entry.link
+            h = hash_item("finra_news:" + combined)
 
             if h not in seen:
                 seen.add(h)
@@ -212,7 +318,7 @@ def check_finra_notices(seen):
         feed = feedparser.parse(FINRA_NOTICES_RSS)
         for entry in feed.entries:
             combined = entry.title + entry.link
-            h = hash_item(combined)
+            h = hash_item("finra_notice:" + combined)
 
             if h not in seen:
                 seen.add(h)
@@ -229,7 +335,7 @@ def check_finra_rule_filings(seen):
         feed = feedparser.parse(FINRA_RULE_RSS)
         for entry in feed.entries:
             combined = entry.title + entry.link
-            h = hash_item(combined)
+            h = hash_item("finra_rule:" + combined)
 
             if h not in seen:
                 seen.add(h)
@@ -271,7 +377,7 @@ def check_dtcc_alerts(seen):
         feed = feedparser.parse(DTCC_RSS)
         for entry in feed.entries:
             combined = entry.title + entry.link
-            h = hash_item(combined)
+            h = hash_item("dtcc:" + combined)
 
             if h not in seen:
                 seen.add(h)
@@ -293,7 +399,7 @@ def check_news_mentions(seen):
         for entry in feed.entries:
             combined = (entry.title or "") + (entry.summary or "") + (entry.link or "")
             if any(k.lower() in combined.lower() for k in KEYWORDS):
-                h = hash_item(combined)
+                h = hash_item("news:" + combined)
                 if h not in seen:
                     seen.add(h)
                     notify(f"📰 **News Mention**\n{entry.title}\n{entry.link}")
@@ -312,8 +418,13 @@ def main():
 
     seen = load_seen()
 
-    # FOIA (deep monitoring)
+    # FOIA
     seen = check_all_foia(seen)
+
+    # Congressional public metadata (non-content)
+    seen = check_congress_bills(seen)
+    seen = check_congress_record(seen)
+    seen = check_congress_hearings(seen)
 
     # SEC
     seen = check_sec_filings(seen)
@@ -330,116 +441,6 @@ def main():
     seen = check_dtcc_alerts(seen)
 
     # News
-    seen = check_news_mentions(seen)
-
-    save_seen(seen)
-
-    print("MMTLP Sentinel completed.")
-
-
-if __name__ == "__main__":
-    main()
-def hash_item(text: str) -> str:
-    """Create a stable hash for deduplication."""
-    return hashlib.sha256(text.encode()).hexdigest()
-
-
-def load_seen():
-    try:
-        with open("seen.txt", "r") as f:
-            return set(line.strip() for line in f.readlines())
-    except FileNotFoundError:
-        return set()
-
-
-def save_seen(seen):
-    with open("seen.txt", "w") as f:
-        for h in seen:
-            f.write(h + "\n")
-
-
-### ---------------------------------------------------------
-### SEC MONITORING
-### ---------------------------------------------------------
-
-def check_sec_filings(seen):
-    """Check SEC EDGAR for new filings related to the issuer."""
-    try:
-        r = requests.get(SEC_SEARCH_URL, headers=HEADERS, timeout=10)
-        if r.status_code != 200:
-            print("SEC request failed:", r.status_code)
-            return seen
-
-        data = r.json()
-        filings = data.get("facts", {})
-
-        # This is a simplified check — EDGAR’s JSON structure varies.
-        # We scan for any new timestamps in the dataset.
-        timestamp = str(data.get("entityType", "")) + str(data.get("cik", ""))
-
-        h = hash_item(timestamp)
-        if h not in seen:
-            seen.add(h)
-            notify("🔎 **SEC Update Detected**\nA new SEC data update was found in the issuer’s filings feed.")
-    except Exception as e:
-        print("SEC error:", e)
-
-    return seen
-
-
-### ---------------------------------------------------------
-### FINRA MONITORING
-### ---------------------------------------------------------
-
-def check_finra_news(seen):
-    """Monitor FINRA newsroom RSS feed."""
-    try:
-        feed = feedparser.parse(FINRA_NEWS_RSS)
-        for entry in feed.entries:
-            text = entry.title + entry.link
-            h = hash_item(text)
-
-            if h not in seen:
-                seen.add(h)
-                notify(f"📘 **FINRA News**\n{entry.title}\n{entry.link}")
-    except Exception as e:
-        print("FINRA error:", e)
-
-    return seen
-
-
-### ---------------------------------------------------------
-### NEWS MONITORING
-### ---------------------------------------------------------
-
-def check_news_mentions(seen):
-    """Scan Google News RSS for MMTLP mentions."""
-    try:
-        feed = feedparser.parse(GOOGLE_NEWS_RSS)
-        for entry in feed.entries:
-            combined = entry.title + entry.summary + entry.link
-            if any(k.lower() in combined.lower() for k in KEYWORDS):
-                h = hash_item(combined)
-                if h not in seen:
-                    seen.add(h)
-                    notify(f"📰 **News Mention**\n{entry.title}\n{entry.link}")
-    except Exception as e:
-        print("News error:", e)
-
-    return seen
-
-
-### ---------------------------------------------------------
-### MAIN LOOP (GitHub Actions runs this once per execution)
-### ---------------------------------------------------------
-
-def main():
-    print("MMTLP Sentinel starting at", datetime.now(timezone.utc))
-
-    seen = load_seen()
-
-    seen = check_sec_filings(seen)
-    seen = check_finra_news(seen)
     seen = check_news_mentions(seen)
 
     save_seen(seen)
